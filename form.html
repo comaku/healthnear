@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<link rel="icon" href="c.png">
+<title>HEALTHNEAR – Find Nearby Health Centers</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+<style>
+body {
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  background: #f5f7fa;
+}
+
+/* ===== PRELOADER ===== */
+#preloader {
+  position: fixed;
+  inset: 0;
+  background: #0f766e;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.typing {
+  font-size: 32px;
+  letter-spacing: 3px;
+  font-weight: bold;
+}
+
+.typing::after {
+  content: "|";
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%, 50%, 100% { opacity: 1; }
+  25%, 75% { opacity: 0; }
+}
+
+/* ===== HEADER ===== */
+header {
+  background: #0f766e;
+  color: white;
+  padding: 15px;
+  text-align: center;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+header p {
+  margin: 5px 0 0;
+  font-size: 14px;
+  opacity: 0.9;
+}
+
+#map {
+  height: calc(100vh - 90px);
+  width: 100%;
+}
+
+footer {
+  text-align: center;
+  padding: 8px;
+  font-size: 12px;
+  background: #e5e7eb;
+}
+</style>
+</head>
+
+<body>
+
+<!-- PRELOADER -->
+<div id="preloader">
+  <div class="typing" id="typingText"></div>
+</div>
+
+<header>
+  <h1>🏥 HEALTHNEAR</h1>
+  <p>Nearest health center around you</p>
+</header>
+
+<div id="map"></div>
+
+<footer>
+  © 2026 HEALTHNEAR • MVP
+</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+/* =========================
+   PRELOADER
+========================= */
+const text = "HEALTHNEAR";
+let i = 0;
+const typingText = document.getElementById("typingText");
+const preloader = document.getElementById("preloader");
+
+(function type() {
+  if (i < text.length) {
+    typingText.textContent += text[i++];
+    setTimeout(type, 150);
+  } else {
+    setTimeout(() => preloader.style.display = "none", 500);
+  }
+})();
+
+/* =========================
+   MAP LOGIC
+========================= */
+let map;
+
+function getDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) *
+    Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function initMap(userLat, userLng) {
+  const mapLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png");
+  const satelliteLayer = L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+  );
+
+  map = L.map("map", {
+    center: [userLat, userLng],
+    zoom: 14,
+    layers: [mapLayer]
+  });
+
+  L.control.layers({
+    "🗺️ Map": mapLayer,
+    "🛰️ Satellite": satelliteLayer
+  }).addTo(map);
+
+  L.marker([userLat, userLng])
+    .addTo(map)
+    .bindPopup("📍 You are here")
+    .openPopup();
+
+  findNearestHealthCenter(userLat, userLng);
+}
+
+function findNearestHealthCenter(lat, lng) {
+  const radius = 15000;
+
+  const query = `
+  [out:json][timeout:25];
+  (
+    node["amenity"="hospital"](around:${radius},${lat},${lng});
+    node["amenity"="clinic"](around:${radius},${lat},${lng});
+  );
+  out body;
+  `;
+
+  fetch("https://overpass.kumi.systems/api/interpreter", {
+    method: "POST",
+    headers: {
+      "Content-Type": "text/plain"
+    },
+    body: query
+  })
+  .then(res => {
+    if (!res.ok) throw new Error("Overpass error");
+    return res.json();
+  })
+  .then(data => {
+    if (!data.elements || !data.elements.length) {
+      alert("No nearby health centers found");
+      return;
+    }
+
+    let nearest = null;
+    let minDistance = Infinity;
+
+    data.elements.forEach(place => {
+      if (!place.lat || !place.lon) return;
+      const d = getDistance(lat, lng, place.lat, place.lon);
+      if (d < minDistance) {
+        minDistance = d;
+        nearest = place;
+      }
+    });
+
+    if (!nearest) return;
+
+    const gmapsLink = `https://www.google.com/maps/dir/?api=1&origin=${lat},${lng}&destination=${nearest.lat},${nearest.lon}`;
+
+    L.marker([nearest.lat, nearest.lon])
+      .addTo(map)
+      .bindPopup(`
+        <strong>${nearest.tags?.name || "Health Center"}</strong><br>
+        Type: ${nearest.tags.amenity}<br>
+        Distance: ${minDistance.toFixed(2)} km<br><br>
+        <a href="${gmapsLink}" target="_blank" style="
+          display:inline-block;
+          padding:6px 10px;
+          background:#0f766e;
+          color:white;
+          text-decoration:none;
+          border-radius:4px;
+        ">Get Directions</a>
+      `)
+      .openPopup();
+
+    map.fitBounds([[lat, lng], [nearest.lat, nearest.lon]], { padding: [40, 40] });
+  })
+  .catch(err => {
+    console.error(err);
+    alert("Unable to load health center data. Please try again.");
+  });
+}
+
+navigator.geolocation.getCurrentPosition(
+  pos => initMap(pos.coords.latitude, pos.coords.longitude),
+  () => alert("Location permission denied")
+);
+</script>
+
+</body>
+</html>
